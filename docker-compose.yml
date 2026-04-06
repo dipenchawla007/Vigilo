@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  sentinel-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: streamlit run ui/app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - SENTINEL_LLM_MODEL=${SENTINEL_LLM_MODEL:-}
+      - SENTINEL_LLM_PROVIDER=${SENTINEL_LLM_PROVIDER:-auto}
+
+  sentinel-sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: sentinel-sandbox
+    profiles:
+      - build-only

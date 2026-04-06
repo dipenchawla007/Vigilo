@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "results": {
+      "total": 2
+    }
+  },
+  "results": [
+    {
+      "event_type": "MALFUNCTION"
+    },
+    {
+      "event_type": "INJURY"
+    }
+  ]
+}
+
