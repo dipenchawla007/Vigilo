@@ -89,11 +89,13 @@ def _build_html(state: InvestigationState) -> str:
                          "<th>95% CI</th><th>p-value</th><th>Cases</th><th>Strength</th><th>In label?</th></tr>")
             for sig in signals:
                 cls = _signal_class(sig.get("signal_strength", "none"))
+                p_value = sig.get("p_value", 0)
+                p_display = "n/a" if sig.get("method") == "ebgm" or p_value < 0 else f"{p_value:.4f}"
                 parts.append(
                     f'<tr><td>{sig["event_term"]}</td><td>{sig["method"].upper()}</td>'
                     f'<td>{sig["estimate"]:.2f}</td>'
                     f'<td>{sig["lower_ci"]:.2f} – {sig["upper_ci"]:.2f}</td>'
-                    f'<td>{sig["p_value"]:.4f}</td>'
+                    f'<td>{p_display}</td>'
                     f'<td>{sig["case_count"]}</td>'
                     f'<td class="{cls}">{sig["signal_strength"]}</td>'
                     f'<td>{"Yes" if sig.get("known_in_label") else "No"}</td></tr>'
@@ -157,7 +159,7 @@ def export_pdf(state: InvestigationState, output_path: str | Path) -> Path:
     try:
         from weasyprint import HTML
         HTML(string=html).write_pdf(str(output_path))
-    except ImportError:
+    except (ImportError, OSError):
         html_path = output_path.with_suffix(".html")
         html_path.write_text(html, encoding="utf-8")
         return html_path

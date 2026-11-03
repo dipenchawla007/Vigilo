@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">Vigilo</h1>
-  <p align="center"><strong>Autonomous FDA Safety Intelligence Agent</strong></p>
+  <p align="center"><strong>Public FAERS evidence packet for a human reviewer</strong></p>
   <p align="center">
     Type a drug name. Get a fully traceable safety investigation — in minutes, not weeks.
   </p>
@@ -17,9 +17,11 @@
 
 ## What is Vigilo?
 
-Vigilo is an **autonomous pharmacovigilance agent** that investigates drug and medical device safety using publicly available FDA data. It replaces weeks of manual analyst work with a fully automated, auditable pipeline that generates safety hypotheses, writes and executes statistical analysis code, detects adverse event signals, and produces a defensible, regulator-ready report — all with every factual claim traced back to a live FDA data source.
+Vigilo screens public FDA adverse-event reports and assembles an evidence packet a pharmacist or safety reviewer can check. Counts come from openFDA. PRR, ROR, and EBGM are computed from a documented suspect-drug contingency table. An installed copy of openEBGM can be run separately to check the EBGM posterior. A reviewer accepts, rejects, or escalates every finding.
 
-**The problem it solves:** Every pharmaceutical company with an approved drug is legally required to continuously monitor its safety after launch. Today, this is overwhelmingly manual — a pharmacovigilance analyst spends 2–4 weeks per assessment querying FAERS, running disproportionality analyses in SAS/R, drafting reports, and seeking expert review. A single assessment costs $50K–$500K when outsourced to a CRO. Vigilo does this in under 15 minutes.
+**Context of use:** Vigilo ranks public drug-event reporting patterns in FDA FAERS and assembles an evidence packet for a pharmacist or safety reviewer. It does not diagnose a patient, decide causality, or produce a regulatory submission.
+
+**The problem it solves:** Every pharmaceutical company with an approved drug is legally required to continuously monitor its safety after launch. Today, this is overwhelmingly manual — a pharmacovigilance analyst spends 2–4 weeks per assessment querying FAERS, running disproportionality analyses in SAS/R, drafting reports, and seeking expert review. A single assessment costs $50K–$500K when outsourced to a CRO. Vigilo prepares a sourced packet for that reviewer.
 
 **The market:** The pharmacovigilance market is valued at $9B in 2025, with 72% of work outsourced to contract research organizations. AI-driven PV is growing at 12–15% CAGR. Early adopters have already shown 41% reduction in case-processing time and 30% improvement in data accuracy.
 
@@ -30,11 +32,11 @@ Vigilo is an **autonomous pharmacovigilance agent** that investigates drug and m
 | Traditional Workflow | Vigilo |
 |---|---|
 | 2–4 weeks per safety assessment | < 15 minutes end-to-end |
-| Manual FAERS queries in web UI or bulk downloads | Autonomous API orchestration via openFDA |
-| Statistical analysis in SAS/R by specialist | LLM-written Python executed in an isolated sandbox |
-| Scattered audit trail — hard to reconstruct | Every claim linked to a reproducible API call |
+| Manual FAERS queries in web UI or bulk downloads | Documented openFDA count queries |
+| Statistical analysis in SAS/R by specialist | PRR, ROR, and EBGM from the count table, with an external openEBGM check |
+| Scattered audit trail — hard to reconstruct | Every quantitative claim linked to a count cell |
 | CRO cost: $50K–$500K per product per year | ~$0.50 per investigation in LLM API cost |
-| Human expert does the analysis | Human expert reviews and approves the analysis |
+| Human expert does the analysis | A reviewer accepts, rejects, or escalates |
 | Signals missed due to analyst bandwidth | Continuous, portfolio-wide monitoring at scale |
 
 Vigilo shifts the pharmacovigilance analyst from **data operator** to **scientific reviewer** — the highest-value use of their expertise.
@@ -89,7 +91,7 @@ Vigilo shifts the pharmacovigilance analyst from **data operator** to **scientif
 
 ### Agent Pipeline (LangGraph State Machine)
 
-The core of Vigilo is a 7-node directed graph with 2 conditional retry loops and 1 human-in-the-loop interrupt. The entire investigation state is a strongly typed `TypedDict` that flows through every node — nothing is lost, every transition is checkpointed.
+The core of Vigilo is a directed graph with conditional retry loops and one human-in-the-loop interrupt. The entire investigation state is a strongly typed `TypedDict` that flows through every node — nothing is lost, every transition is checkpointed.
 
 ```
 User input: drug or device name
@@ -115,29 +117,37 @@ User input: drug or device name
 └────────────┬────────────┘     └─────────────────────┘
              ▼
 ┌─────────────────────────┐
-│  4. ANALYZE             │  Compute signal strength:
-│                         │  PRR · ROR · EBGM · trend analysis
-│                         │  Cross-reference against drug label
+│  4. ANALYZE             │  PRR, ROR, and EBGM from a
+│                         │  suspect-drug count table.
+│                         │  Label text match on the
+│                         │  leading preferred term.
 └────────────┬────────────┘
              ▼
 ┌─────────────────────────┐
-│  5. WRITE REPORT        │  FDA post-market surveillance format.
-│                         │  Every factual claim gets a source
-│                         │  citation to a live openFDA API call.
+│  5. EVIDENCE PANEL      │  Statistician, label, and
+│                         │  challenger may only use
+│                         │  sourced fields. Verifier
+│                         │  drops any other number.
+└────────────┬────────────┘
+             ▼
+┌─────────────────────────┐
+│  6. WRITE REPORT        │  Evidence packet. Every
+│                         │  quantitative claim cites
+│                         │  the count that produced it.
 └────────────┬────────────┘
              ▼
 ┌─────────────────────────┐     ┌─────────────────────┐
-│  6. COMPLIANCE REVIEW   │────▶│ Unsourced claims?    │
+│  7. COMPLIANCE REVIEW   │────▶│ Unsourced claims?    │
 │                         │     │ Rewrite up to 2×     │
 │                         │     │ (issues fed back to  │
-│                         │     │  node 5 for revision)│
+│                         │     │  the report node)    │
 └────────────┬────────────┘     └─────────────────────┘
              ▼
 ┌─────────────────────────┐
-│  7. HUMAN REVIEW GATE   │  LangGraph interrupt_before pause.
-│                         │  Expert approves, requests changes,
-│                         │  or rejects. Full state is persisted —
-│                         │  can resume hours or days later.
+│  8. HUMAN REVIEW GATE   │  Reviewer accepts, rejects,
+│                         │  or escalates. A correction
+│                         │  is required to reject or
+│                         │  escalate and is only logged.
 └────────────┬────────────┘
              ▼
       PDF safety report
@@ -414,10 +424,10 @@ All data is free, public, requires no PHI agreements, and updates weekly.
 ## Target Users
 
 ### Regulatory Affairs Manager at a Small Biotech
-Currently outsources PV work to a CRO at $75K–$200K/product/year with 3–6 week turnaround times. Vigilo replaces routine signal detection: type the drug name, review the autonomous investigation, have a defensible report in under an hour.
+Currently outsources PV work to a CRO at $75K–$200K/product/year with 3–6 week turnaround times. Vigilo prepares a sourced public-data packet: type the drug name, then accept, reject, or escalate the finding.
 
 ### Pharmacovigilance Consultant at a CRO
-Manages 10–30 monitoring accounts. Vigilo acts as an autonomous first-pass analyst — the consultant reviews and refines output rather than building from scratch, increasing throughput 5–10×.
+Manages 10–30 monitoring accounts. Vigilo prepares a first-pass public-data packet — the consultant accepts, rejects, or escalates it rather than building the count table from scratch.
 
 ### VP of Regulatory at a Large Pharma
 Oversees a 50+ product portfolio. Vigilo provides consistent methodology and complete traceability across all products, making regulatory audits straightforward.
@@ -436,7 +446,7 @@ The key differentiator is **end-to-end autonomy with traceability**. Existing AI
 
 | Phase | Timeline | Milestone |
 |---|---|---|
-| **Phase 1** — Drug Safety MVP | Weeks 1–6 | Core autonomous pipeline, FAERS signal detection, Streamlit UI, PDF export |
+| **Phase 1** — Drug Safety MVP | Weeks 1–6 | FAERS count table, evidence panel, Streamlit review, PDF export |
 | **Phase 2** — Medical Devices | Weeks 7–10 | MAUDE integration, device hypothesis templates, production deployment |
 | **Phase 3** — Traction | Weeks 11–16 | Open-source core release, public demo, buyer conversations, accelerator applications |
 | **Phase 4** — Enterprise | Post-funding | Multi-user workspaces, continuous monitoring, internal database integration, SSO/RBAC |

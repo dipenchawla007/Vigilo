@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sentinel"
 version = "0.1.0"
-description = "Autonomous FDA safety intelligence agent"
+description = "Public FAERS evidence packet for a human reviewer"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

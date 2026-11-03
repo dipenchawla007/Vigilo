@@ -12,8 +12,24 @@ from langgraph.types import Command
 from sentinel.clients.llm import LLMClient
 from sentinel.clients.openfda import OpenFDAClient
 from sentinel.config import settings
-from sentinel.nodes import analyze, execute, human_gate, hypothesize, review, write_code, write_report
+from sentinel.nodes import analyze, execute, human_gate, hypothesize, panel, review, write_code, write_report
 from sentinel.state import InvestigationState
+
+
+_DECISIONS = {
+    "accept": "accept",
+    "approve": "accept",
+    "reject": "reject",
+    "escalate": "escalate",
+    "request_changes": "escalate",
+}
+
+
+def _canonical_decision(decision: str) -> str:
+    canonical = _DECISIONS.get(decision.strip().lower())
+    if canonical is None:
+        raise ValueError("Review decision must be accept, reject, or escalate.")
+    return canonical
 
 
 class InvestigationGraph:
@@ -41,6 +57,9 @@ class InvestigationGraph:
             run_dir = self.workspace / state["investigation_id"]
             return analyze.run(state, self.client, run_dir)
 
+        def evidence_panel_node(state: InvestigationState) -> InvestigationState:
+            return panel.run(state)
+
         def write_report_node(state: InvestigationState) -> InvestigationState:
             return write_report.run(state)
 
@@ -54,6 +73,7 @@ class InvestigationGraph:
         workflow.add_node("write_code", write_code_node)
         workflow.add_node("execute", execute_node)
         workflow.add_node("analyze", analyze_node)
+        workflow.add_node("evidence_panel", evidence_panel_node)
         workflow.add_node("write_report", write_report_node)
         workflow.add_node("review", review_node)
         workflow.add_node("human_gate", human_gate_node)
@@ -70,7 +90,8 @@ class InvestigationGraph:
                 "end_failed": END,
             },
         )
-        workflow.add_edge("analyze", "write_report")
+        workflow.add_edge("analyze", "evidence_panel")
+        workflow.add_edge("evidence_panel", "write_report")
         workflow.add_edge("write_report", "review")
         workflow.add_conditional_edges(
             "review",
@@ -80,14 +101,7 @@ class InvestigationGraph:
                 "human_gate": "human_gate",
             },
         )
-        workflow.add_conditional_edges(
-            "human_gate",
-            self._route_after_human_gate,
-            {
-                "rewrite_report": "write_report",
-                "end": END,
-            },
-        )
+        workflow.add_edge("human_gate", END)
 
         return workflow.compile(
             checkpointer=self.checkpointer,
@@ -109,12 +123,6 @@ class InvestigationGraph:
         if state.get("compliance_issues") and state.get("review_attempts", 0) <= settings.agent.max_review_retries:
             return "rewrite_report"
         return "human_gate"
-
-    @staticmethod
-    def _route_after_human_gate(state: InvestigationState) -> str:
-        if state.get("human_decision") == "request_changes":
-            return "rewrite_report"
-        return "end"
 
     @staticmethod
     def build_config(thread_id: str) -> dict:
@@ -146,12 +154,24 @@ class InvestigationGraph:
         return result
 
     def resume(self, investigation_id: str, *, human_decision: str, reviewer_feedback: str = "") -> InvestigationState:
+        decision = _canonical_decision(human_decision)
+        correction = reviewer_feedback.strip()
+        if decision in {"reject", "escalate"} and not correction:
+            current = self.get_state(investigation_id)
+            current["status"] = "awaiting_review"
+            current["human_decision"] = "pending"
+            current["review_error"] = (
+                "A correction is required to reject or escalate. "
+                "The correction is stored in the review log and is not used to train a model."
+            )
+            return current
         config = self.build_config(investigation_id)
         result = self.app.invoke(
             Command(
                 update={
-                    "human_decision": human_decision,
-                    "reviewer_feedback": reviewer_feedback,
+                    "human_decision": decision,
+                    "reviewer_feedback": correction,
+                    "review_error": "",
                 }
             ),
             config=config,

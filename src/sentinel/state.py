@@ -5,7 +5,8 @@ from typing import Any, Literal, TypedDict
 
 ProductType = Literal["drug", "device"]
 SignalStrength = Literal["none", "weak", "moderate", "strong"]
-ReviewDecision = Literal["approve", "request_changes", "reject", "pending"]
+ReviewDecision = Literal["accept", "reject", "escalate", "pending"]
+ReviewTier = Literal["required", "routine"]
 
 
 class SourceRecord(TypedDict):
@@ -55,6 +56,15 @@ class ExecutionResult(TypedDict):
     generated_at: str
 
 
+class CountCitation(TypedDict):
+    cell: str
+    value: int
+    endpoint: str
+    query: str
+    full_url: str
+    retrieved_at: str
+
+
 class StatisticalSignal(TypedDict):
     event_term: str
     method: str
@@ -65,6 +75,25 @@ class StatisticalSignal(TypedDict):
     case_count: int
     signal_strength: SignalStrength
     known_in_label: bool
+    citations: list[CountCitation]
+
+
+class ReviewRecord(TypedDict):
+    decision: Literal["accept", "reject", "escalate"]
+    correction: str
+    recorded_at: str
+    review_tier: ReviewTier
+    event_term: str
+    known_in_label: bool
+    signal_strength: str
+    used_for_model_training: bool
+
+
+class VerifiedClaim(TypedDict):
+    role: Literal["statistician", "label", "challenger"]
+    text: str
+    sources: list[SourceRecord]
+    citations: list[CountCitation]
 
 
 class ProgressEvent(TypedDict):
@@ -94,6 +123,11 @@ class InvestigationState(TypedDict, total=False):
     review_attempts: int
     human_decision: ReviewDecision
     reviewer_feedback: str
+    review_tier: ReviewTier
+    review_log: list[ReviewRecord]
+    review_error: str
+    verified_claims: list[VerifiedClaim]
+    verification_issues: list[str]
     progress: list[ProgressEvent]
     audit_trail: list[SourceRecord]
     final_markdown: str

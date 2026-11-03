@@ -6,24 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from sentinel.clients.openfda import OpenFDAClient
-from sentinel.config import settings
 from sentinel.nodes.common import add_progress
-from sentinel.state import InvestigationState, StatisticalSignal
-from sentinel.stats.disproportionality import compute_ebgm, compute_prr, compute_ror
+from sentinel.state import InvestigationState
+from sentinel.stats.faers_table import CASE_DEFINITION, retrieve_drug_tables
+from sentinel.stats.openebgm_check import check_posterior
+from sentinel.stats.signals import known_in_label, score_tables
 from sentinel.stats.trend import compute_trend
-
-
-def _signal_strength(estimate: float, p_value: float, case_count: int) -> str:
-    cfg = settings.signal_detection
-    if case_count < cfg.min_case_count:
-        return "none"
-    if estimate >= max(cfg.prr_threshold * 1.5, 3.0) and p_value < 0.01:
-        return "strong"
-    if estimate >= cfg.prr_threshold and p_value < cfg.chi_square_alpha:
-        return "moderate"
-    if estimate > 1.2:
-        return "weak"
-    return "none"
 
 
 def _safe_int(value: Any) -> int:
@@ -124,62 +112,46 @@ def run(state: InvestigationState, client: OpenFDAClient, workspace: Path) -> In
     known_terms_text = _flatten_label_text(label_results)
 
     summary_file = workspace / "workspace" / "summary.json"
-    top_events: list[list[str | int]] = []
     execution_summary: dict[str, Any] = {}
     if summary_file.exists():
         execution_summary = json.loads(summary_file.read_text())
-        top_events = execution_summary.get("top_events", [])
+
+    trend_values = [_safe_int(value) for _, value in (execution_summary.get("timeline") or event_profile.get("timeline", []))]
+    trend = compute_trend(trend_values[-8:] if trend_values else [0])
+    scored: dict[str, Any] = {
+        "signals": [],
+        "contingency": {},
+        "prior": {"status": "not_estimated", "theta": None, "pair_count": 0, "note": ""},
+        "pairs": [],
+    }
+    openebgm_check: dict[str, Any] = {
+        "status": "not_run",
+        "detail": "Disproportionality counts are computed for drugs. Device runs do not build a FAERS table.",
+    }
+    count_status = "not_computed_for_devices"
+    count_detail = "Device reports do not use the FAERS suspect-drug contingency table."
+    if is_drug:
+        count_result = retrieve_drug_tables(
+            client,
+            product_name,
+            int(state.get("time_range_years", 5) or 5),
+        )
+        sources.extend(count_result.sources)
+        count_status = count_result.status
+        count_detail = count_result.detail
+        labeled = False
+        if count_result.tables:
+            labeled = known_in_label(count_result.tables[0].event_term, known_terms_text)
+            event_count = count_result.tables[0].n_drug
+        scored = score_tables(count_result.tables, count_result.citations, known_in_label=labeled)
+        pairs = [(int(item["N"]), float(item["E"])) for item in scored["pairs"]]
+        openebgm_check = check_posterior(pairs, scored["prior"].get("theta"))
+    signals = scored["signals"]
+    contingency = scored["contingency"]
+    labeled_event = bool(signals and signals[0]["known_in_label"])
+    top_events = [[item["event_term"], item["N"]] for item in scored["pairs"]]
     if not top_events:
         top_events = event_profile.get("top_events", [])
-
-    case_count = int(top_events[0][1]) if top_events else min(event_count, 10)
-    non_case_count = max(event_count - case_count, 1)
-    comparator_total = max(sum(count for _, count in top_events[1:6]), case_count + 20)
-    comparator_case_count = max(int(comparator_total * 0.2), 1)
-    comparator_non_case = max(comparator_total - comparator_case_count, 1)
-    prr = compute_prr(case_count, non_case_count, comparator_case_count, comparator_non_case)
-    ror = compute_ror(case_count, non_case_count, comparator_case_count, comparator_non_case)
-    ebgm = compute_ebgm(case_count, expected=max(comparator_case_count, 1.0))
-    trend_values = [_safe_int(value) for _, value in (execution_summary.get("timeline") or event_profile.get("timeline", []))]
-    trend = compute_trend(trend_values[-8:] if trend_values else [case_count])
-    event_term = str(top_events[0][0]) if top_events else "serious adverse events"
-    known_in_label = event_term.lower() in known_terms_text if known_terms_text else False
-
-    signals: list[StatisticalSignal] = [
-        StatisticalSignal(
-            event_term=event_term,
-            method="prr",
-            estimate=prr["estimate"],
-            lower_ci=prr["lower_ci"],
-            upper_ci=prr["upper_ci"],
-            p_value=prr["p_value"],
-            case_count=case_count,
-            signal_strength=_signal_strength(prr["estimate"], prr["p_value"], case_count),
-            known_in_label=known_in_label,
-        ),
-        StatisticalSignal(
-            event_term=event_term,
-            method="ror",
-            estimate=ror["estimate"],
-            lower_ci=ror["lower_ci"],
-            upper_ci=ror["upper_ci"],
-            p_value=ror["p_value"],
-            case_count=case_count,
-            signal_strength=_signal_strength(ror["estimate"], ror["p_value"], case_count),
-            known_in_label=known_in_label,
-        ),
-        StatisticalSignal(
-            event_term=event_term,
-            method="ebgm",
-            estimate=ebgm["estimate"],
-            lower_ci=ebgm["lower_ci"],
-            upper_ci=ebgm["upper_ci"],
-            p_value=0.0,
-            case_count=case_count,
-            signal_strength="moderate" if ebgm["estimate"] >= settings.signal_detection.ebgm_threshold else "weak",
-            known_in_label=known_in_label,
-        ),
-    ]
     for source in sources:
         source["raw_json_path"] = ""
     analysis_dir = workspace / "workspace"
@@ -217,7 +189,14 @@ def run(state: InvestigationState, client: OpenFDAClient, workspace: Path) -> In
         "recall_count": len(recalls),
         "approval_date": approval_date,
         "execution_summary": execution_summary,
-        "known_vs_new_signal": "known" if known_in_label else "potential_new",
+        "known_vs_new_signal": "known" if labeled_event else "not_found_in_retrieved_label",
+        "contingency": contingency,
+        "case_definition": CASE_DEFINITION,
+        "count_status": count_status,
+        "count_detail": count_detail,
+        "ebgm_prior": scored["prior"],
+        "openebgm_check": openebgm_check,
+        "count_pairs": scored["pairs"],
     }
     add_progress(state, "analyze", "completed", f"Computed {len(signals)} signal estimates.")
     return state

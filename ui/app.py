@@ -63,7 +63,7 @@ def start_investigation(product_name: str, product_type: str, time_range_years: 
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/48/shield.png", width=36)
     st.header("Sentinel")
-    st.caption("Autonomous FDA Safety Intelligence")
+    st.caption("Public FAERS evidence packet")
     st.divider()
 
     product_name = st.text_input(
@@ -112,16 +112,15 @@ state = st.session_state.get("investigation_state")
 
 if not state:
     st.title("Sentinel")
-    st.subheader("Autonomous FDA Safety Intelligence Agent")
+    st.subheader("Public FAERS evidence packet")
     st.markdown(
-        "Type a drug or device name in the sidebar, and Sentinel will autonomously:\n"
-        "1. Generate safety hypotheses\n"
-        "2. Write and execute analysis code against live FDA data\n"
-        "3. Compute signal detection statistics (PRR, ROR, EBGM, trend)\n"
-        "4. Produce a traceable safety report\n"
-        "5. Run compliance review\n"
-        "6. Pause for your expert review before finalizing\n\n"
-        "Every claim in the report links to the exact openFDA API call that produced the data."
+        "Type a drug or device name in the sidebar. Vigilo will:\n"
+        "1. Retrieve openFDA counts for a suspect-drug contingency table\n"
+        "2. Compute PRR, ROR, and EBGM from those counts\n"
+        "3. Keep only claims whose numbers match those fields\n"
+        "4. Pause for you to accept, reject, or escalate\n\n"
+        "Vigilo ranks public reporting patterns for a reviewer. It does not diagnose a patient, "
+        "decide causality, or produce a regulatory submission."
     )
     st.stop()
 
@@ -133,9 +132,9 @@ status_map = {
     "running": ("Running investigation...", "🔄"),
     "awaiting_review": ("Awaiting your review", "⏸️"),
     "completed": ("Investigation completed", "✅"),
+    "escalated": ("Escalated for follow-up", "⬆️"),
     "failed": ("Investigation failed", "❌"),
     "rejected": ("Investigation rejected", "🚫"),
-    "revision_requested": ("Revision requested", "✏️"),
 }
 label, icon = status_map.get(status, (status, "ℹ️"))
 st.title(f"{icon} {state.get('product_name', '')} — {label}")
@@ -153,7 +152,7 @@ with tab_progress:
     if not progress_events:
         st.info("Investigation starting...")
     else:
-        node_order = ["hypothesize", "write_code", "execute", "analyze", "write_report", "review", "human_gate"]
+        node_order = ["hypothesize", "write_code", "execute", "analyze", "evidence_panel", "write_report", "review", "human_gate"]
         completed_nodes = {e["node"] for e in progress_events if e["status"] == "completed"}
 
         cols = st.columns(len(node_order))
@@ -299,23 +298,31 @@ with tab_report:
 with tab_review:
     if status == "awaiting_review":
         st.subheader("Review decision")
+        tier = state.get("review_tier", "required")
+        if tier == "required":
+            st.warning("A reviewer is required: the event was not found in the retrieved label, or a score was classified as strong.")
+        else:
+            st.info("Routine review. The leading event was found in the retrieved label and no score was classified as strong.")
         st.markdown(
-            "The investigation pipeline has completed. Review the report in the **Report** tab, "
-            "then make your decision below."
+            "Vigilo ranks public reporting patterns. It does not diagnose a patient, decide causality, "
+            "or produce a regulatory submission. Accept, reject, or escalate the packet. "
+            "A correction is required to reject or escalate. Corrections are logged and are not used to train a model."
         )
+        if state.get("review_error"):
+            st.error(state["review_error"])
 
         decision = st.radio(
             "Your decision",
-            ["approve", "request_changes", "reject"],
+            ["accept", "reject", "escalate"],
             captions=[
-                "Accept the report and generate final PDF output",
-                "Send back to the report writer with feedback for revision",
-                "Terminate this investigation (logged in audit trail)",
+                "Accept the evidence packet and export it",
+                "Reject the packet and record the correction",
+                "Escalate the packet and record the correction",
             ],
             key="review_decision",
         )
         feedback = st.text_area(
-            "Reviewer feedback (optional for approve, required for request_changes)",
+            "Correction (required to reject or escalate)",
             value=state.get("reviewer_feedback", ""),
             key="reviewer_feedback_input",
         )
@@ -336,7 +343,7 @@ with tab_review:
 
     elif status == "completed":
         st.subheader("Investigation completed")
-        st.success("The report has been approved and exported.")
+        st.success("The reviewer accepted the packet and it was exported.")
 
         output_paths = state.get("output_paths", [])
         if output_paths:
@@ -382,7 +389,13 @@ with tab_review:
     elif status == "failed":
         st.error("Investigation failed. Check the Progress tab for details.")
     elif status == "rejected":
-        st.warning("This investigation was rejected during review.")
+        st.warning("The reviewer rejected this packet.")
+        if state.get("review_log"):
+            st.json(state["review_log"][-1])
+    elif status == "escalated":
+        st.warning("The reviewer escalated this packet.")
+        if state.get("review_log"):
+            st.json(state["review_log"][-1])
     elif status == "running":
         st.info("Investigation is still running. Review will be available once all pipeline nodes complete.")
     else:

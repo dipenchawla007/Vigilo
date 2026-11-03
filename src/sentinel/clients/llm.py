@@ -397,7 +397,7 @@ print(json.dumps(output))
                     "You are a pharmacovigilance compliance reviewer.\n\n"
                     "TASK: Review this safety investigation report for quality and compliance.\n\n"
                     "CHECK FOR:\n"
-                    "1. Missing required sections (Product identification, Surveillance objective, "
+        "1. Missing required sections (Context of use, Product identification, Surveillance objective, "
                     "Data sources and methodology, Adverse event summary, Statistical analysis, "
                     "Signal assessment, Limitations, Recommendations, Audit trail appendix)\n"
                     "2. Claims without source citations\n"
@@ -422,6 +422,7 @@ print(json.dumps(output))
 
         # Deterministic structural checks always run
         required_headings = {
+            "Context of use",
             "Product identification",
             "Surveillance objective",
             "Data sources and methodology",
@@ -438,7 +439,7 @@ print(json.dumps(output))
             issues.append(f"Missing required report sections: {', '.join(missing)}.")
         for section in context.get("report_sections", []):
             heading = section.get("heading")
-            if heading == "Limitations":
+            if heading in {"Limitations", "Context of use"}:
                 continue
             if not section.get("sources"):
                 issues.append(f"Section '{heading or 'unknown'}' has no sources.")
